@@ -1,5 +1,7 @@
 # Ark Codex Skill
 
+> 本分支新增事件驱动状态同步、可选动作联动、中英文透明居中状态字幕，以及“遥”的桌宠素材库。新生成的角色均继承这些功能。详见 [增强功能与验证](ENHANCEMENTS.md)。这是独立Python桌宠，不是Codex原生Custom pets。
+
 用AI辅助制作的一个用于制作《明日方舟》透明桌面宠物（Codex 桌宠）的 Codex skill。给它一个干员名（可选皮肤名），它会自动从 PRTS Wiki 导出该干员的基建 WebM 动画，转换成带透明通道的 PNG 帧，生成桌宠并加入桌宠库。
 
 > 仓库：[AstrariaX/Ark-codex-skill](https://github.com/AstrariaX/Ark-codex-skill)
@@ -118,7 +120,7 @@ ark-codex-skill/
 - 双击切换迷你模式（隐藏/显示字幕条）
 - 拖动播放走路动画，松手恢复之前状态
 - 右键菜单：坐下 / 放松 / 睡觉 / 桌宠库 / 锁定 / 设置 / 放大 / 缩小 / 退出
-- 头顶字幕：Codex 运行状态、最近任务、模型、运行时长、Token 用量、最近完成时间
+- 头顶字幕：仅显示Codex状态，可中英文切换，透明居中显示
 - 每个角色独立记住位置、大小、动作倍速
 - 迷你模式、全屏应用自动隐藏
 - 可设置随 ChatGPT / Codex 启动和关闭

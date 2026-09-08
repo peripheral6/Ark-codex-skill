@@ -8,3 +8,7 @@ work/
 *.log
 *.pid
 *.flag
+settings.json
+settings.json.tmp
+.deps/
+.pytest_cache/
