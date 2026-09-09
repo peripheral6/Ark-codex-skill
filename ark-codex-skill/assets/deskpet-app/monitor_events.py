@@ -117,6 +117,59 @@ class LogMonitor:
             result.update(active=False, phase='unknown', event_key=None)
         return result
 
+class GlobalMonitor:
+    """Aggregate independent incremental readers; never finish while any is active."""
+    def __init__(self, root=None):
+        self.thread_id = None
+        self.root = Path(root or Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex')))/'sessions')
+        self.readers = {}
+        self.next_scan = 0
+
+    def poll(self):
+        try:
+            if time.monotonic() >= self.next_scan:
+                paths = set(self.root.rglob('rollout-*.jsonl'))
+                self.next_scan = time.monotonic() + 1.0
+                for path in paths:
+                    if path not in self.readers:
+                        reader = LogMonitor(self.root)
+                        reader.path = path
+                        self.readers[path] = reader
+                for path in set(self.readers) - paths:
+                    del self.readers[path]
+            states = []
+            loading = False
+            for path, reader in self.readers.items():
+                # Keep each reader attached to exactly one task file.
+                reader.path = path
+                state = reader.poll()
+                # Catch up large historical logs in the worker, not over dozens
+                # of UI timer ticks. Work remains bounded to 32 MiB per file.
+                for _ in range(7):
+                    if state.get('error') or reader.offset >= path.stat().st_size:
+                        break
+                    state = reader.poll()
+                loading |= bool(state.get('error')) or reader.offset < path.stat().st_size
+                states.append((str(path), state))
+            if loading:
+                return dict(active=False, phase='unknown', event_key=None)
+            active = [(path, s) for path, s in states if s.get('active')]
+            if active:
+                result = dict(max(active, key=lambda item: item[1].get('started_at') or 0)[1])
+                result.update(active_count=len(active), event_key=('global-running', tuple(sorted(
+                    (path, str(s.get('event_key'))) for path, s in active))))
+                return result
+            terminal = [(path, s) for path, s in states if s.get('finished_at') is not None]
+            if terminal:
+                path, state = max(terminal, key=lambda item: item[1]['finished_at'])
+                result = dict(state)
+                result.update(active_count=0, event_key=('global-terminal', path, state.get('event_key')))
+                return result
+            return dict(active=False, phase='unknown', event_key=None, active_count=0)
+        except OSError as exc:
+            return dict(active=False, phase='unknown', event_key=None, error=str(exc))
+
+
 _monitor = None
 _future = None
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='pet-log-reader')
@@ -131,7 +184,7 @@ def get_codex_status(thread_id=None):
         _monitor = None
         _latest = dict(active=False, phase='unknown')
     if _monitor is None:
-        _monitor = LogMonitor(thread_id=thread_id)
+        _monitor = GlobalMonitor() if thread_id is None else LogMonitor(thread_id=thread_id)
     if _future is not None and _future.done():
         try:
             _latest = _future.result()

@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 import monitor_events as codex_monitor
+from single_instance import InstanceLock
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PETS_DIR = os.path.join(BASE_DIR, "pets")
@@ -259,7 +260,7 @@ class SettingsDialog(QDialog):
         self.language_combo.addItem("English", "en")
         self.language_combo.setCurrentIndex(1 if settings.get("subtitle_language") == "en" else 0)
         self.thread_edit = QLineEdit(settings.get("monitor_thread_id") or "")
-        self.thread_edit.setPlaceholderText("留空：启动时选择最近任务并固定跟踪")
+        self.thread_edit.setPlaceholderText("留空：监听所有本地任务")
         self.actions_check = QCheckBox("根据任务状态切换动作")
         self.actions_check.setChecked(settings.get("status_actions", True))
         self.autostart_check.setChecked(
@@ -397,6 +398,8 @@ class PetWindow(QWidget):
         self.status_text = "Codex 待机"
         self.status_active = False
         self.status_event_key = None
+        self.caption_event_key = None
+        self.completed_caption_deadline = None
         self.tray_hidden = False
 
         self.timer = QTimer(self)
@@ -455,7 +458,17 @@ class PetWindow(QWidget):
         if app is not None:
             app.aboutToQuit.connect(self.save_position)
         self.refresh_status()
+        self.ensure_on_screen()
         self.show()
+
+    def ensure_on_screen(self):
+        screen = QGuiApplication.screenAt(self.geometry().center()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        x = max(area.left(), min(self.x(), area.right() - self.width() + 1))
+        y = max(area.top(), min(self.y(), area.bottom() - self.height() + 1))
+        self.move(x, y)
 
     def tick_ms(self):
         return max(10, int(round(1000 / FPS / self.speed)))
@@ -469,9 +482,9 @@ class PetWindow(QWidget):
         old_w, old_h = self.width(), self.height()
         bx, by, bx2, by2 = info["bbox"]
         width = int((bx2 - bx + 1) * self.scale) + PAD * 2
-        if self.show_status:
+        if self.show_status and self.status_text:
             width = max(240, width)
-        status_extra = self.subtitle_height(width) if self.show_status else 0
+        status_extra = self.subtitle_height(width) if self.show_status and self.status_text else 0
         height = int((by2 - by + 1) * self.scale) + PAD * 2 + status_extra
         self.resize(width, height)
         bottom_center_x = old_x + old_w / 2
@@ -480,6 +493,8 @@ class PetWindow(QWidget):
             int(bottom_center_x - width / 2),
             int(bottom_y - height),
         )
+        if self.isVisible() and not self.drag:
+            self.ensure_on_screen()
 
     def subtitle_layout(self, width):
         bar_width = min(width - 12, max(120, int((width - 12) * self.bar_length / 100.0)))
@@ -566,7 +581,7 @@ class PetWindow(QWidget):
         image = self.current_image()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        status_extra = self.subtitle_height(self.width()) if self.show_status else 0
+        status_extra = self.subtitle_height(self.width()) if self.show_status and self.status_text else 0
         if not image.isNull():
             target = QRectF(
                 (self.width() - (bx2-bx+1)*self.scale)/2 - bx * self.scale,
@@ -579,7 +594,7 @@ class PetWindow(QWidget):
             painter.drawImage(target, image)
             painter.restore()
 
-        if self.show_status:
+        if self.show_status and self.status_text:
             layout, bar_width, subtitle_height = self.subtitle_layout(self.width())
             bar = QRectF((self.width()-bar_width)/2, 4, bar_width, subtitle_height - 8)
             painter.setPen(QColor(255, 255, 255))
@@ -845,6 +860,7 @@ class PetWindow(QWidget):
 
     def show_from_tray(self):
         self.tray_hidden = False
+        self.ensure_on_screen()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -958,6 +974,14 @@ class PetWindow(QWidget):
         status = codex_monitor.get_codex_status(self.settings.get("monitor_thread_id"))
         self.status_active = bool(status.get("active"))
         event_key = status.get("event_key")
+        caption_key = (event_key, status.get("phase"), self.status_active)
+        if caption_key != self.caption_event_key:
+            self.caption_event_key = caption_key
+            self.completed_caption_deadline = (
+                time.monotonic() + 10.0
+                if status.get("phase") == "completed" and not self.status_active
+                else None
+            )
         if (self.settings.get("status_actions", True) and event_key
                 and event_key != self.status_event_key and not self.drag):
             self.status_event_key = event_key
@@ -978,11 +1002,20 @@ class PetWindow(QWidget):
                        "failed": "Codex 失败", "unknown": "Codex 状态未知"})
             base = labels.get(status.get("phase"), "Codex Idle" if english else "Codex 待机")
         self.status_text = base
+        if (self.completed_caption_deadline is not None
+                and time.monotonic() >= self.completed_caption_deadline):
+            self.status_text = ""
         self.apply_geometry()
         self.update()
 
 
 def main():
+    instance_lock = InstanceLock(BASE_DIR)
+    if not instance_lock.acquire():
+        with open(SHOW_FLAG, "w", encoding="utf-8"):
+            pass
+        return 0
+    atexit.register(instance_lock.close)
     with open(PID_FILE, "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
     atexit.register(remove_pid_file)

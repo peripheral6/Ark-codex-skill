@@ -89,9 +89,18 @@ class UiTests(unittest.TestCase):
             status.update(active=False,phase='completed',event_key=('one','end',2))
             w.refresh_status()
             self.assertEqual(w.state,'interact')
+            deadline = w.completed_caption_deadline
+            with patch.object(main.time, 'monotonic', return_value=deadline + 0.1):
+                w.refresh_status()
+                self.assertEqual(w.status_text, '')
+            w.move(-10000, -10000)
+            w.ensure_on_screen()
+            area = main.QGuiApplication.primaryScreen().availableGeometry()
+            self.assertTrue(area.contains(w.geometry()))
             status.update(phase='interrupted',event_key=('one','abort',3))
             w.refresh_status()
             self.assertEqual(w.state,'sit')
+            self.assertTrue(w.status_text)
             w.settings['status_actions']=False
             status.update(active=True,phase='running',event_key=('two','start',4))
             w.refresh_status()
